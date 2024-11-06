@@ -12,9 +12,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
     depends_on:
       - mongodb
-    restart: unless-stopped
     networks:
       - app-network
+    volumes:
+      - ./logs:/app/logs
 
   mongodb:
     image: mongo:latest
@@ -24,6 +25,9 @@ services:
       - mongodb_data:/data/db
     networks:
       - app-network
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=secret
 
 networks:
   app-network:

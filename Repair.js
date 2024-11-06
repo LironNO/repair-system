@@ -1,4 +1,22 @@
-const mongoose = require('mongoose');
+
+import mongoose from 'mongoose';
+
+const repairHistorySchema = new mongoose.Schema({
+    date: {
+        type: Date,
+        default: Date.now
+    },
+    action: {
+        type: String,
+        required: true
+    },
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    details: String
+});
 
 const repairSchema = new mongoose.Schema({
     serialNumber: {
@@ -17,8 +35,15 @@ const repairSchema = new mongoose.Schema({
         enum: ['hardware', 'network'],
         required: true
     },
-    networkType: String,
-    hasWarranty: Boolean,
+    networkType: {
+        type: String,
+        enum: ['nes-harim', 'olympus', 'tokyo', 'atlas', 'edge', null],
+        default: null
+    },
+    hasWarranty: {
+        type: Boolean,
+        default: false
+    },
     status: {
         type: String,
         enum: ['pending', 'in_progress', 'completed', 'returned'],
@@ -26,17 +51,17 @@ const repairSchema = new mongoose.Schema({
     },
     technician: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'User',
+        required: true
     },
-    history: [{
-        action: String,
-        date: { type: Date, default: Date.now },
-        user: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        details: String
-    }]
+    history: [repairHistorySchema],
+    returnDetails: {
+        collectorName: String,
+        signature: String,
+        returnDate: Date
+    }
 }, { timestamps: true });
 
-module.exports = mongoose.model('Repair', repairSchema);
+const Repair = mongoose.model('Repair', repairSchema);
+
+export default Repair;

@@ -1,263 +1,92 @@
-'use strict';
 
-class QuickLRU {
-	constructor(options = {}) {
-		if (!(options.maxSize && options.maxSize > 0)) {
-			throw new TypeError('`maxSize` must be a number greater than 0');
-		}
+import express from 'express';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
-		if (typeof options.maxAge === 'number' && options.maxAge === 0) {
-			throw new TypeError('`maxAge` must be a number greater than 0');
-		}
+dotenv.config();
 
-		this.maxSize = options.maxSize;
-		this.maxAge = options.maxAge || Infinity;
-		this.onEviction = options.onEviction;
-		this.cache = new Map();
-		this.oldCache = new Map();
-		this._size = 0;
-	}
+const app = express();
 
-	_emitEvictions(cache) {
-		if (typeof this.onEviction !== 'function') {
-			return;
-		}
+// Middleware
+app.use(cors());
+app.use(express.json());
 
-		for (const [key, item] of cache) {
-			this.onEviction(key, item.value);
-		}
-	}
+// MongoDB Connection
+const connectDB = async () => {
+    try {
+        await mongoose.connect('mongodb://127.0.0.1:27017/repair-system', {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+        });
+        console.log('✅ MongoDB Connected Successfully');
+    } catch (error) {
+        console.error('❌ MongoDB Connection Error:', error);
+        process.exit(1);
+    }
+};
 
-	_deleteIfExpired(key, item) {
-		if (typeof item.expiry === 'number' && item.expiry <= Date.now()) {
-			if (typeof this.onEviction === 'function') {
-				this.onEviction(key, item.value);
-			}
+// Basic route for testing
+app.get('/', (req, res) => {
+    res.json({ message: 'Repair System API is running' });
+});
 
-			return this.delete(key);
-		}
+// Health check route
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
+});
 
-		return false;
-	}
+// Try to find an available port
+const findAvailablePort = (startPort) => {
+    return new Promise((resolve, reject) => {
+        const server = app.listen(startPort, '127.0.0.1', () => {
+            const port = server.address().port;
+            server.close(() => resolve(port));
+        }).on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                // Try the next port
+                resolve(findAvailablePort(startPort + 1));
+            } else {
+                reject(err);
+            }
+        });
+    });
+};
 
-	_getOrDeleteIfExpired(key, item) {
-		const deleted = this._deleteIfExpired(key, item);
-		if (deleted === false) {
-			return item.value;
-		}
-	}
+// Start server
+const startServer = async () => {
+    try {
+        await connectDB();
+        
+        const basePort = parseInt(process.env.PORT || '3001');
+        const port = await findAvailablePort(basePort);
+        
+        app.listen(port, '127.0.0.1', () => {
+            console.log(`
+🚀 Server is running successfully!
+📍 Server URL: http://localhost:${port}
+🏥 Health Check: http://localhost:${port}/health
+💾 Database: Connected
+⌛ Time: ${new Date().toLocaleString()}
+            `);
+        });
+    } catch (error) {
+        console.error('❌ Server startup failed:', error);
+        process.exit(1);
+    }
+};
 
-	_getItemValue(key, item) {
-		return item.expiry ? this._getOrDeleteIfExpired(key, item) : item.value;
-	}
+// Handle graceful shutdown
+process.on('SIGINT', () => {
+    mongoose.connection.close(() => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+    });
+});
 
-	_peek(key, cache) {
-		const item = cache.get(key);
+startServer();
 
-		return this._getItemValue(key, item);
-	}
-
-	_set(key, value) {
-		this.cache.set(key, value);
-		this._size++;
-
-		if (this._size >= this.maxSize) {
-			this._size = 0;
-			this._emitEvictions(this.oldCache);
-			this.oldCache = this.cache;
-			this.cache = new Map();
-		}
-	}
-
-	_moveToRecent(key, item) {
-		this.oldCache.delete(key);
-		this._set(key, item);
-	}
-
-	* _entriesAscending() {
-		for (const item of this.oldCache) {
-			const [key, value] = item;
-			if (!this.cache.has(key)) {
-				const deleted = this._deleteIfExpired(key, value);
-				if (deleted === false) {
-					yield item;
-				}
-			}
-		}
-
-		for (const item of this.cache) {
-			const [key, value] = item;
-			const deleted = this._deleteIfExpired(key, value);
-			if (deleted === false) {
-				yield item;
-			}
-		}
-	}
-
-	get(key) {
-		if (this.cache.has(key)) {
-			const item = this.cache.get(key);
-
-			return this._getItemValue(key, item);
-		}
-
-		if (this.oldCache.has(key)) {
-			const item = this.oldCache.get(key);
-			if (this._deleteIfExpired(key, item) === false) {
-				this._moveToRecent(key, item);
-				return item.value;
-			}
-		}
-	}
-
-	set(key, value, {maxAge = this.maxAge === Infinity ? undefined : Date.now() + this.maxAge} = {}) {
-		if (this.cache.has(key)) {
-			this.cache.set(key, {
-				value,
-				maxAge
-			});
-		} else {
-			this._set(key, {value, expiry: maxAge});
-		}
-	}
-
-	has(key) {
-		if (this.cache.has(key)) {
-			return !this._deleteIfExpired(key, this.cache.get(key));
-		}
-
-		if (this.oldCache.has(key)) {
-			return !this._deleteIfExpired(key, this.oldCache.get(key));
-		}
-
-		return false;
-	}
-
-	peek(key) {
-		if (this.cache.has(key)) {
-			return this._peek(key, this.cache);
-		}
-
-		if (this.oldCache.has(key)) {
-			return this._peek(key, this.oldCache);
-		}
-	}
-
-	delete(key) {
-		const deleted = this.cache.delete(key);
-		if (deleted) {
-			this._size--;
-		}
-
-		return this.oldCache.delete(key) || deleted;
-	}
-
-	clear() {
-		this.cache.clear();
-		this.oldCache.clear();
-		this._size = 0;
-	}
-	
-	resize(newSize) {
-		if (!(newSize && newSize > 0)) {
-			throw new TypeError('`maxSize` must be a number greater than 0');
-		}
-
-		const items = [...this._entriesAscending()];
-		const removeCount = items.length - newSize;
-		if (removeCount < 0) {
-			this.cache = new Map(items);
-			this.oldCache = new Map();
-			this._size = items.length;
-		} else {
-			if (removeCount > 0) {
-				this._emitEvictions(items.slice(0, removeCount));
-			}
-
-			this.oldCache = new Map(items.slice(removeCount));
-			this.cache = new Map();
-			this._size = 0;
-		}
-
-		this.maxSize = newSize;
-	}
-
-	* keys() {
-		for (const [key] of this) {
-			yield key;
-		}
-	}
-
-	* values() {
-		for (const [, value] of this) {
-			yield value;
-		}
-	}
-
-	* [Symbol.iterator]() {
-		for (const item of this.cache) {
-			const [key, value] = item;
-			const deleted = this._deleteIfExpired(key, value);
-			if (deleted === false) {
-				yield [key, value.value];
-			}
-		}
-
-		for (const item of this.oldCache) {
-			const [key, value] = item;
-			if (!this.cache.has(key)) {
-				const deleted = this._deleteIfExpired(key, value);
-				if (deleted === false) {
-					yield [key, value.value];
-				}
-			}
-		}
-	}
-
-	* entriesDescending() {
-		let items = [...this.cache];
-		for (let i = items.length - 1; i >= 0; --i) {
-			const item = items[i];
-			const [key, value] = item;
-			const deleted = this._deleteIfExpired(key, value);
-			if (deleted === false) {
-				yield [key, value.value];
-			}
-		}
-
-		items = [...this.oldCache];
-		for (let i = items.length - 1; i >= 0; --i) {
-			const item = items[i];
-			const [key, value] = item;
-			if (!this.cache.has(key)) {
-				const deleted = this._deleteIfExpired(key, value);
-				if (deleted === false) {
-					yield [key, value.value];
-				}
-			}
-		}
-	}
-
-	* entriesAscending() {
-		for (const [key, value] of this._entriesAscending()) {
-			yield [key, value.value];
-		}
-	}
-
-	get size() {
-		if (!this._size) {
-			return this.oldCache.size;
-		}
-
-		let oldCacheSize = 0;
-		for (const key of this.oldCache.keys()) {
-			if (!this.cache.has(key)) {
-				oldCacheSize++;
-			}
-		}
-
-		return Math.min(this._size + oldCacheSize, this.maxSize);
-	}
-}
-
-module.exports = QuickLRU;
+export default app;

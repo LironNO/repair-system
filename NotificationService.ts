@@ -1,69 +1,57 @@
 
-import { EventEmitter } from 'events';
+import { WebSocket } from 'ws';
 
-interface Notification {
-    id: string;
-    message: string;
-    type: 'info' | 'warning' | 'error' | 'success';
-    timestamp: Date;
-    read: boolean;
-}
-
-export class NotificationService {
-    private static instance: NotificationService;
-    private socket: WebSocket;
-    private emitter: EventEmitter;
-
-    private constructor() {
-        this.emitter = new EventEmitter();
-        this.connectWebSocket();
+class NotificationService {
+    static instance = null;
+    constructor() {
+        this.clients = new Map();
     }
 
-    private connectWebSocket() {
-        this.socket = new WebSocket(`${process.env.REACT_APP_WS_URL}/notifications`);
-        
-        this.socket.onmessage = (event) => {
-            const notification = JSON.parse(event.data);
-            this.emitter.emit('notification', notification);
-        };
-
-        this.socket.onclose = () => {
-            // Reconnect after 5 seconds
-            setTimeout(() => this.connectWebSocket(), 5000);
-        };
-    }
-
-    public static getInstance(): NotificationService {
+    static getInstance() {
         if (!NotificationService.instance) {
             NotificationService.instance = new NotificationService();
         }
         return NotificationService.instance;
     }
 
-    public subscribe(callback: (notification: Notification) => void): () => void {
-        this.emitter.on('notification', callback);
-        return () => this.emitter.off('notification', callback);
+    addClient(userId, ws) {
+        this.clients.set(userId, ws);
     }
 
-    public async sendNotification(notification: Omit<Notification, 'id' | 'timestamp' | 'read'>): Promise<void> {
-        try {
-            await fetch('/api/notifications', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                },
-                body: JSON.stringify(notification)
-            });
-        } catch (error) {
-            console.error('Error sending notification:', error);
-            throw error;
+    removeClient(userId) {
+        this.clients.delete(userId);
+    }
+
+    sendToUser(userId, notification) {
+        const client = this.clients.get(userId);
+        if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(notification));
         }
     }
 
-    public playNotificationSound() {
-        const audio = new Audio('/notification-sound.mp3');
-        audio.play().catch(console.error);
+    broadcast(notification) {
+        this.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(notification));
+            }
+        });
+    }
+
+    sendNotification(type, message, targetUsers = null) {
+        const notification = {
+            type,
+            message,
+            timestamp: new Date()
+        };
+
+        if (targetUsers) {
+            targetUsers.forEach(userId => {
+                this.sendToUser(userId, notification);
+            });
+        } else {
+            this.broadcast(notification);
+        }
     }
 }
- 
+
+export default NotificationService;

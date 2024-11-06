@@ -1,40 +1,39 @@
 
-# Frontend Build
+# Stage 1: Frontend Build
 FROM node:16-alpine as frontend-build
-WORKDIR /app/frontend
+WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm install
 COPY client/ .
 RUN npm run build
 
-# Backend Build
+# Stage 2: Backend Build
 FROM node:16-alpine as backend-build
-WORKDIR /app/backend
+WORKDIR /app/server
 COPY server/package*.json ./
 RUN npm install
 COPY server/ .
 RUN npm run build
 
-# Production
+# Stage 3: Production
 FROM node:16-alpine
 WORKDIR /app
 
-# Copy backend build
-COPY --from=backend-build /app/backend/dist ./dist
-COPY --from=backend-build /app/backend/package*.json ./
+# Copy backend
+COPY --from=backend-build /app/server/dist ./dist
+COPY --from=backend-build /app/server/package*.json ./
 RUN npm install --production
 
 # Copy frontend build
-COPY --from=frontend-build /app/frontend/build ./public
+COPY --from=frontend-build /app/client/build ./public
 
 # Environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV MONGODB_URI=mongodb://mongodb:27017/repair-system
-ENV JWT_SECRET=your-secret-key
 
 # Expose port
 EXPOSE 3000
 
-# Start the server
+# Start command
 CMD ["npm", "start"]
+``
